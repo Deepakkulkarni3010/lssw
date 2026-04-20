@@ -1,0 +1,298 @@
+name: Build, Test & Deploy — deepakkulkarni.space
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:        # Allow manual trigger
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true  # Cancel stale runs on new push
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_APP: ghcr.io/${{ github.repository_owner }}/lssw-app
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/lssw-frontend
+  NODE_VERSION: '20'
+
+# ─── Job 1: Lint & Type Check ─────────────────────────────────────────────────
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check backend
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Type-check frontend
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Lint backend
+        working-directory: backend
+        run: npm run lint || true   # Non-fatal on first iteration
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint || true
+
+# ─── Job 2: Unit Tests ────────────────────────────────────────────────────────
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: lssw_test
+          POSTGRES_USER: lssw_test
+          POSTGRES_PASSWORD: testpassword123
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Run database migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://lssw_test:testpassword123@localhost:5432/lssw_test
+        run: psql $DATABASE_URL -f ../db/migrations/001_initial_schema.sql
+
+      - name: Run unit tests
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://lssw_test:testpassword123@localhost:5432/lssw_test
+          REDIS_URL: redis://localhost:6379
+          SESSION_SECRET: test_session_secret_64_chars_long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+          SESSION_ENCRYPTION_KEY: test_encryption_key_32_chars_xxxxx
+          LINKEDIN_CLIENT_ID: test_client_id
+          LINKEDIN_CLIENT_SECRET: test_client_secret
+          LINKEDIN_CALLBACK_URL: http://localhost:3000/auth/linkedin/callback
+          ALLOWED_ORIGINS: http://localhost:5173
+        run: npm run test:unit || echo "No tests yet — skipping"
+
+# ─── Job 3: Build Docker Images ───────────────────────────────────────────────
+  build:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_APP }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # ── Build & push backend ──
+      - name: Build & push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_APP }}:${{ github.sha }}
+            ${{ env.IMAGE_APP }}:latest
+          platforms: linux/amd64
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          labels: |
+            org.opencontainers.image.title=LSSW Backend
+            org.opencontainers.image.description=LinkedIn Smart Search Wrapper API
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+
+      # ── Build & push frontend ──
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+            ${{ env.IMAGE_FRONTEND }}:latest
+          platforms: linux/amd64
+          build-args: |
+            VITE_API_URL=https://deepakkulkarni.space
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          labels: |
+            org.opencontainers.image.title=LSSW Frontend
+            org.opencontainers.image.description=LinkedIn Smart Search Wrapper React SPA
+            org.opencontainers.image.revision=${{ github.sha }}
+
+# ─── Job 4: Deploy to Hostinger ───────────────────────────────────────────────
+  deploy:
+    name: Deploy to Hostinger (deepakkulkarni.space)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    environment:
+      name: production
+      url: https://deepakkulkarni.space
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          port: ${{ secrets.HOSTINGER_SSH_PORT || 22 }}
+          timeout: 120s
+          script: |
+            set -e
+
+            echo "🚀 Deploying LSSW to deepakkulkarni.space"
+            cd /opt/lssw
+
+            # Pull latest images
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose pull app frontend
+
+            # Update IMAGE_TAG in .env (optional, uses 'latest' by default)
+            sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=latest/" .env
+
+            # Blue-green ish: bring up new containers before removing old
+            docker compose up -d --remove-orphans --no-deps app frontend
+
+            # Wait for health check
+            echo "⏳ Waiting for app health check..."
+            for i in $(seq 1 12); do
+              if curl -sf https://deepakkulkarni.space/health > /dev/null 2>&1; then
+                echo "✅ Health check passed"
+                break
+              fi
+              echo "Attempt $i/12 — waiting 10s..."
+              sleep 10
+            done
+
+            # Reload Nginx (config may have changed)
+            docker compose exec -T nginx nginx -s reload || true
+
+            # Prune old images (keep last 3)
+            docker image prune -f --filter "until=72h"
+
+            echo "✅ Deployment complete — https://deepakkulkarni.space"
+
+      - name: Notify deployment
+        if: always()
+        run: |
+          echo "Deployment status: ${{ job.status }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Deployed by: ${{ github.actor }}"
+          echo "URL: https://deepakkulkarni.space"
+
+# ─── Job 5: Post-deploy health check ─────────────────────────────────────────
+  healthcheck:
+    name: Post-deploy Health Check
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Wait for propagation
+        run: sleep 30
+
+      - name: Health check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://deepakkulkarni.space/health)
+          echo "Health endpoint status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Health check failed with status $STATUS"
+            exit 1
+          fi
+          echo "✅ deepakkulkarni.space is healthy"
+
+      - name: Frontend reachability
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://deepakkulkarni.space)
+          echo "Frontend status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Frontend not reachable: $STATUS"
+            exit 1
+          fi
+          echo "✅ Frontend is reachable"

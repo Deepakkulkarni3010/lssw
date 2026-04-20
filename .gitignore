@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+.env.production
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs
+backend/dist/
+frontend/dist/
+
+# Certbot / SSL (never commit certificates)
+certbot/conf/
+nginx/conf.d/*.key
+nginx/conf.d/*.crt
+
+# Data volumes (never commit database files)
+data/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# TypeScript
+*.tsbuildinfo

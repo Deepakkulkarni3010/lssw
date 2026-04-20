@@ -1,0 +1,223 @@
+version: "3.9"
+
+# ─── LinkedIn Smart Search Wrapper — Production Stack ─────────────────────────
+# Domain: deepakkulkarni.space
+# Data residency: EU (Frankfurt)
+
+services:
+
+  # ── Nginx reverse proxy + SSL termination ─────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: lssw-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot-www:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      app:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+    networks: [lssw-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/health-nginx"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Certbot (Let's Encrypt SSL auto-renewal) ───────────────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    container_name: lssw-certbot
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    entrypoint: >
+      /bin/sh -c "trap exit TERM;
+      while :; do
+        certbot renew --webroot -w /var/www/certbot --quiet --no-random-sleep-on-renew;
+        echo '[certbot] renewal check done';
+        sleep 12h & wait $${!};
+      done"
+    restart: unless-stopped
+    networks: [lssw-net]
+
+  # ── Backend API (Node.js + Playwright) ────────────────────────────────────
+  app:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/lssw-app:${IMAGE_TAG:-latest}
+    container_name: lssw-app
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/lssw?sslmode=disable"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET}
+      LINKEDIN_CALLBACK_URL: "https://deepakkulkarni.space/auth/linkedin/callback"
+      ALLOWED_ORIGINS: "https://deepakkulkarni.space,https://www.deepakkulkarni.space"
+      PLAYWRIGHT_MAX_PAGES: ${PLAYWRIGHT_MAX_PAGES:-5}
+      PLAYWRIGHT_BROWSER_TIMEOUT_MS: ${PLAYWRIGHT_BROWSER_TIMEOUT_MS:-15000}
+      PLAYWRIGHT_NAV_DELAY_MIN_MS: ${PLAYWRIGHT_NAV_DELAY_MIN_MS:-500}
+      PLAYWRIGHT_NAV_DELAY_MAX_MS: ${PLAYWRIGHT_NAV_DELAY_MAX_MS:-1500}
+      RATE_LIMIT_SEARCHES_PER_HOUR: ${RATE_LIMIT_SEARCHES_PER_HOUR:-30}
+      RESULT_CACHE_TTL_SECONDS: ${RESULT_CACHE_TTL_SECONDS:-600}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [lssw-net]
+    # Required for Playwright Chromium
+    shm_size: '256mb'
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Frontend React SPA ─────────────────────────────────────────────────────
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/lssw-frontend:${IMAGE_TAG:-latest}
+    container_name: lssw-frontend
+    restart: unless-stopped
+    networks: [lssw-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── PostgreSQL 15 (EU persisted volume) ───────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: lssw-db
+    environment:
+      POSTGRES_DB: lssw
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+      # GDPR: ensure PostgreSQL logs minimal data
+      POSTGRES_HOST_AUTH_METHOD: md5
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+      - pg-backups:/backups
+    restart: unless-stopped
+    networks: [lssw-net]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d lssw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── Redis 7 (session store + rate limiter + cache) ────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: lssw-redis
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --loglevel warning
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks: [lssw-net]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Automated DB backup (daily at 3am UTC) ────────────────────────────────
+  db-backup:
+    image: postgres:15-alpine
+    container_name: lssw-db-backup
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg-backups:/backups
+    entrypoint: >
+      /bin/sh -c "
+      while true; do
+        sleep 86400;
+        pg_dump -h db -U ${POSTGRES_USER} lssw | gzip > /backups/lssw-\$$(date +%Y%m%d_%H%M%S).sql.gz;
+        ls -t /backups/*.sql.gz | tail -n +8 | xargs rm -f;
+        echo 'Backup completed';
+      done"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [lssw-net]
+
+# ─── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  pg-data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/lssw/data/postgres
+      o: bind
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/lssw/data/redis
+      o: bind
+  pg-backups:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/lssw/data/backups
+      o: bind
+  certbot-www:
+    driver: local
+  certbot-certs:
+    driver: local
+  nginx-logs:
+    driver: local
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  lssw-net:
+    name: lssw-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
