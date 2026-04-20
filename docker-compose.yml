@@ -50,9 +50,7 @@ services:
 
   # ── Backend API (Node.js + Playwright) ────────────────────────────────────
   app:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/lssw-app:${IMAGE_TAG:-latest}
     container_name: lssw-app
     environment:
       NODE_ENV: production
@@ -96,9 +94,7 @@ services:
 
   # ── Frontend React SPA ─────────────────────────────────────────────────────
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/lssw-frontend:${IMAGE_TAG:-latest}
     container_name: lssw-frontend
     restart: unless-stopped
     networks: [lssw-net]

@@ -1,0 +1,189 @@
+name: Build & Deploy — deepakkulkarni.space
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # Images use the repo owner (your GitHub username), lower-cased
+  IMAGE_APP:      ghcr.io/${{ github.repository_owner }}/lssw-app
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/lssw-frontend
+  NODE_VERSION: '20'
+
+# ─── Job 1: Lint & Type Check ─────────────────────────────────────────────────
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check backend
+        working-directory: backend
+        run: npx tsc --noEmit
+
+      - name: Type-check frontend
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+# ─── Job 2: Build & Push Docker Images ───────────────────────────────────────
+  build:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build & push backend
+      - name: Build & push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_APP }}:${{ github.sha }}
+            ${{ env.IMAGE_APP }}:latest
+          platforms: linux/amd64
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      # Build & push frontend
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_FRONTEND }}:${{ github.sha }}
+            ${{ env.IMAGE_FRONTEND }}:latest
+          platforms: linux/amd64
+          build-args: |
+            VITE_API_URL=https://deepakkulkarni.space
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+# ─── Job 3: Deploy to VPS ─────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Hostinger VPS
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    environment:
+      name: production
+      url: https://deepakkulkarni.space
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.HOSTINGER_HOST }}
+          username: ${{ secrets.HOSTINGER_USER }}
+          key:      ${{ secrets.HOSTINGER_SSH_KEY }}
+          port:     22
+          timeout:  180s
+          script: |
+            set -e
+            cd /opt/lssw
+
+            # Pull latest images from GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+              -u ${{ github.actor }} --password-stdin
+
+            docker compose pull app frontend
+
+            # Run any new DB migrations
+            docker compose exec -T db psql \
+              -U "$POSTGRES_USER" -d lssw \
+              -f /docker-entrypoint-initdb.d/002_linkedin_sessions_and_results.sql \
+              2>/dev/null || echo "Migration 002 already applied or skipped"
+
+            # Restart app + frontend with zero-downtime (pull then up)
+            docker compose up -d --no-deps app frontend
+
+            # Wait for health check
+            for i in $(seq 1 18); do
+              if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+                echo "Health check passed on attempt $i"
+                break
+              fi
+              echo "Waiting... attempt $i/18"
+              sleep 10
+            done
+
+            # Reload Nginx config
+            docker compose exec -T nginx nginx -s reload || true
+
+            # Prune old images
+            docker image prune -f --filter "until=72h"
+
+            echo "Deployment complete"
+
+# ─── Job 4: Post-deploy Health Check ─────────────────────────────────────────
+  healthcheck:
+    name: Post-deploy Health Check
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Wait for propagation
+        run: sleep 20
+
+      - name: Check API health
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://deepakkulkarni.space/health)
+          echo "Health endpoint: $STATUS"
+          [ "$STATUS" = "200" ] || exit 1
+
+      - name: Check frontend
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://deepakkulkarni.space)
+          echo "Frontend: $STATUS"
+          [ "$STATUS" = "200" ] || exit 1
+
+      - name: Deployment summary
+        run: |
+          echo "Deployed commit ${{ github.sha }} to https://deepakkulkarni.space"
+          echo "Triggered by: ${{ github.actor }}"

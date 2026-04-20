@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <!-- Main gradient: LinkedIn blue to deep navy -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a66c2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#003d7a;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- Accent gradient for the search ring -->
+    <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d0e8ff;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- Glow filter for the magnifier -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Subtle inner shadow on bg -->
+    <filter id="innerShadow">
+      <feOffset dx="0" dy="2"/>
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <!-- Clip to rounded square -->
+    <clipPath id="roundedClip">
+      <rect x="0" y="0" width="400" height="400" rx="80" ry="80"/>
+    </clipPath>
+  </defs>
+
+  <!-- ── Background rounded square ── -->
+  <rect x="0" y="0" width="400" height="400" rx="80" ry="80" fill="url(#bgGrad)"/>
+
+  <!-- ── Subtle radial highlight top-left ── -->
+  <radialGradient id="highlight" cx="25%" cy="20%" r="55%">
+    <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.12"/>
+    <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0"/>
+  </radialGradient>
+  <rect x="0" y="0" width="400" height="400" rx="80" ry="80" fill="url(#highlight)"/>
+
+  <!-- ── Connection dots (network nodes) — decorative ── -->
+  <!-- Top cluster -->
+  <circle cx="68"  cy="72"  r="5" fill="#ffffff" opacity="0.18"/>
+  <circle cx="110" cy="52"  r="3.5" fill="#ffffff" opacity="0.14"/>
+  <circle cx="150" cy="72"  r="4" fill="#ffffff" opacity="0.12"/>
+  <line x1="68" y1="72" x2="110" y2="52" stroke="#ffffff" stroke-width="1.2" opacity="0.1"/>
+  <line x1="110" y1="52" x2="150" y2="72" stroke="#ffffff" stroke-width="1.2" opacity="0.1"/>
+
+  <!-- Right cluster -->
+  <circle cx="340" cy="100" r="4.5" fill="#ffffff" opacity="0.14"/>
+  <circle cx="360" cy="140" r="3" fill="#ffffff" opacity="0.10"/>
+  <circle cx="328" cy="148" r="3.5" fill="#ffffff" opacity="0.12"/>
+  <line x1="340" y1="100" x2="360" y2="140" stroke="#ffffff" stroke-width="1.2" opacity="0.09"/>
+  <line x1="360" y1="140" x2="328" y2="148" stroke="#ffffff" stroke-width="1.2" opacity="0.09"/>
+
+  <!-- Bottom-left cluster -->
+  <circle cx="58"  cy="330" r="4" fill="#ffffff" opacity="0.12"/>
+  <circle cx="92"  cy="348" r="3" fill="#ffffff" opacity="0.10"/>
+  <circle cx="72"  cy="310" r="2.5" fill="#ffffff" opacity="0.09"/>
+  <line x1="58" y1="330" x2="92" y2="348" stroke="#ffffff" stroke-width="1.2" opacity="0.08"/>
+
+  <!-- Bottom-right cluster -->
+  <circle cx="330" cy="320" r="4" fill="#ffffff" opacity="0.12"/>
+  <circle cx="355" cy="346" r="3" fill="#ffffff" opacity="0.09"/>
+  <line x1="330" y1="320" x2="355" y2="346" stroke="#ffffff" stroke-width="1.2" opacity="0.08"/>
+
+  <!-- ── "in" wordmark (LinkedIn style) — top-left badge ── -->
+  <rect x="30" y="28" width="52" height="52" rx="8" fill="#ffffff" opacity="0.15"/>
+  <text x="56" y="65" font-family="Georgia, serif" font-size="30" font-weight="900"
+        fill="#ffffff" text-anchor="middle" letter-spacing="-1">in</text>
+
+  <!-- ── Main magnifying glass ── -->
+  <!-- Shadow / depth ring -->
+  <circle cx="183" cy="183" r="82" fill="none" stroke="#000000" stroke-width="24" opacity="0.18"/>
+
+  <!-- Outer ring -->
+  <circle cx="183" cy="183" r="82" fill="none" stroke="url(#ringGrad)"
+          stroke-width="20" filter="url(#glow)"/>
+
+  <!-- Inner circle (glass face) -->
+  <circle cx="183" cy="183" r="62" fill="#0a66c2" opacity="0.25"/>
+  <circle cx="183" cy="183" r="62" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.3"/>
+
+  <!-- Lens inner highlight -->
+  <circle cx="163" cy="163" r="18" fill="#ffffff" opacity="0.07"/>
+
+  <!-- ── Boolean filter lines inside lens ── -->
+  <g opacity="0.60">
+    <!-- Three horizontal "filter" bars suggesting structured search -->
+    <rect x="152" y="168" width="62" height="6" rx="3" fill="#ffffff"/>
+    <rect x="158" y="181" width="50" height="6" rx="3" fill="#70b8ff"/>
+    <rect x="163" y="194" width="40" height="6" rx="3" fill="#ffffff" opacity="0.7"/>
+    <!-- Small AND connector dots -->
+    <circle cx="146" cy="171" r="4" fill="#70b8ff" opacity="0.9"/>
+    <circle cx="146" cy="184" r="4" fill="#70b8ff" opacity="0.9"/>
+    <circle cx="146" cy="197" r="4" fill="#70b8ff" opacity="0.9"/>
+  </g>
+
+  <!-- ── Handle ── -->
+  <!-- Shadow -->
+  <line x1="248" y1="248" x2="306" y2="310"
+        stroke="#000000" stroke-width="30" stroke-linecap="round" opacity="0.20"/>
+  <!-- Handle body -->
+  <line x1="248" y1="248" x2="306" y2="310"
+        stroke="url(#ringGrad)" stroke-width="24" stroke-linecap="round"
+        filter="url(#glow)"/>
+  <!-- Handle highlight stripe -->
+  <line x1="248" y1="248" x2="302" y2="306"
+        stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.25"/>
+
+  <!-- ── "SMART" label — small, above main text ── -->
+  <text x="200" y="335"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="13" font-weight="700" letter-spacing="5.5"
+        fill="#70b8ff" text-anchor="middle" opacity="0.9">SMART</text>
+
+  <!-- ── Main wordmark ── -->
+  <text x="200" y="368"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="28" font-weight="800" letter-spacing="1.5"
+        fill="#ffffff" text-anchor="middle">SEARCH</text>
+
+  <!-- ── Thin divider line ── -->
+  <line x1="120" y1="345" x2="280" y2="345" stroke="#ffffff" stroke-width="1" opacity="0.2"/>
+
+</svg>
