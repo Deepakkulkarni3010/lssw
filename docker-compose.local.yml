@@ -1,0 +1,23 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.local.yml
+# Overrides the main docker-compose.yml to BUILD images locally on the VPS
+# instead of pulling from GHCR (used before GitHub Actions CI/CD is set up)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  app:
+    image: lssw-app:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+  frontend:
+    image: lssw-frontend:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
