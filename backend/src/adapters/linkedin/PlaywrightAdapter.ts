@@ -148,8 +148,14 @@ async function scrapeResults(page: Page): Promise<CandidateCard[]> {
     diagInfo.bodyText.toLowerCase().includes('no results found') ||
     diagInfo.bodyText.toLowerCase().includes('try removing filters')
   ) {
-    logger.warn('LinkedIn served empty-results page (bot detection likely)', {
+    // Log cookies present to diagnose whether _px3 / session cookies are intact
+    const cookieCount = await Promise.race([
+      page.evaluate(() => document.cookie.split(';').length),
+      evalTimeout(3000, -1),
+    ]).catch(() => -1);
+    logger.warn('LinkedIn served empty-results page', {
       url: diagInfo.currentUrl,
+      cookiesVisible: cookieCount,
     });
     return [];
   }
@@ -398,11 +404,6 @@ export class PlaywrightLinkedInAdapter {
     const browserPage = await ctx.newPage();
 
     try {
-      // Block unnecessary resources to speed up load
-      await browserPage.route('**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf}', (route) => {
-        route.abort();
-      });
-
       // Build the keyword string (same logic as URL builder but just the text)
       const keywordParts: string[] = [];
       if (params.customString)      keywordParts.push(params.customString);
