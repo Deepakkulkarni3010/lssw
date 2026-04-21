@@ -1,0 +1,46 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync source to server
+        run: |
+          rsync -avz --delete \
+            --exclude='.env' \
+            --exclude='node_modules' \
+            --exclude='dist' \
+            --exclude='.git' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            ./ root@${{ secrets.SSH_HOST }}:/opt/lssw/
+
+      - name: Build and restart backend
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.SSH_HOST }} bash << 'ENDSSH'
+            set -e
+            cd /opt/lssw
+            echo "=== Building backend Docker image ==="
+            docker compose build --no-cache backend
+            echo "=== Restarting backend container ==="
+            docker compose up -d --force-recreate backend
+            echo "=== Waiting for startup ==="
+            sleep 5
+            docker compose ps
+            echo "=== Last 30 lines of backend logs ==="
+            docker compose logs --tail=30 backend
+          ENDSSH
