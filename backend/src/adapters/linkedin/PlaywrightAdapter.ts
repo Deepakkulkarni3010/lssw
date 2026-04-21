@@ -330,8 +330,11 @@ export class PlaywrightLinkedInAdapter {
   private async getContext(userId: string): Promise<BrowserContext> {
     if (!this.browser) throw new Error('Browser not initialized');
 
+    // Only create a new context if none exists in memory — don't recreate
+    // just because pages().length === 0 (a context with 0 pages is still
+    // valid and retains all cookies/storage from the warm-up).
     let ctx = this.activeSessions.get(userId);
-    if (!ctx || ctx.pages().length === 0) {
+    if (!ctx) {
       ctx = await loadContext(this.browser, userId);
       this.activeSessions.set(userId, ctx);
     }
@@ -367,7 +370,7 @@ export class PlaywrightLinkedInAdapter {
     ]);
 
     // Warm up: visit LinkedIn feed so it sets bcookie, bscookie, lidc, _px3, etc.
-    // This primes the PerimeterX challenge token in this browser context.
+    // Also validates that the injected cookies are actually authenticated.
     const warmupPage = await ctx.newPage();
     try {
       await warmupPage.goto('https://www.linkedin.com/feed/', {
@@ -375,8 +378,14 @@ export class PlaywrightLinkedInAdapter {
         timeout: 30000,
       });
       await warmupPage.waitForTimeout(2500);
-      logger.info('LinkedIn session warmed up', { userId });
+      const warmupUrl = warmupPage.url();
+      if (warmupUrl.includes('/login') || warmupUrl.includes('/checkpoint') || warmupUrl.includes('/authwall')) {
+        logger.error('LinkedIn session cookies are invalid — warm-up redirected to auth page', { userId, warmupUrl });
+        throw new Error('LINKEDIN_COOKIES_INVALID');
+      }
+      logger.info('LinkedIn session warmed up', { userId, landedOn: warmupUrl.substring(0, 60) });
     } catch (e) {
+      if (String(e).includes('LINKEDIN_COOKIES_INVALID')) throw e;
       logger.warn('Session warm-up failed (non-fatal)', { userId, err: String(e) });
     } finally {
       await warmupPage.close();
