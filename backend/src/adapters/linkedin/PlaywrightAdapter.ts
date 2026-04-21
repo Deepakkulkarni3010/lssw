@@ -395,7 +395,7 @@ export class PlaywrightLinkedInAdapter {
       });
 
       const response = await browserPage.goto(pageUrl, {
-        waitUntil: 'networkidle',
+        waitUntil: 'domcontentloaded',
         timeout: config.playwright.browserTimeoutMs,
       });
 
