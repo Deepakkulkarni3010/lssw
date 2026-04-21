@@ -35,13 +35,13 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no root@${{ secrets.SSH_HOST }} bash << 'ENDSSH'
             set -e
             cd /opt/lssw
-            echo "=== Building app Docker image ==="
-            docker compose build --no-cache app
+            echo "=== Building app image from source ==="
+            docker build --no-cache -t ghcr.io/local/lssw-app:latest ./backend
             echo "=== Restarting app container ==="
             docker compose up -d --force-recreate app
             echo "=== Waiting for startup ==="
             sleep 10
             docker compose ps
-            echo "=== Last 30 lines of app logs ==="
-            docker compose logs --tail=30 app
+            echo "=== Last 20 lines of app logs ==="
+            docker compose logs --tail=20 app
           ENDSSH
