@@ -448,46 +448,39 @@ export class PlaywrightLinkedInAdapter {
           await searchInput.fill('');
           await searchInput.type(searchQuery, { delay: 80 });
           await randomDelay(400, 800);
-          await browserPage.keyboard.press('Enter');
-          logger.info('Search query submitted via search box', { userId, query: searchQuery });
 
-          // Wait for navigation to search results
-          await browserPage.waitForNavigation({
-            waitUntil: 'domcontentloaded',
-            timeout: config.playwright.browserTimeoutMs,
-          }).catch(() => {});
+          // Start watching for navigation BEFORE pressing Enter — LinkedIn SPA
+          // route changes don't fire a full load event, so use waitForURL.
+          await Promise.all([
+            browserPage.waitForURL('**/search/results/**', {
+              timeout: config.playwright.browserTimeoutMs,
+            }).catch(() => {}),
+            browserPage.keyboard.press('Enter'),
+          ]);
+          logger.info('Search query submitted via search box', { userId, query: searchQuery });
 
           await randomDelay(800, 1500);
 
-          // Click "People" filter tab to scope results to people
-          const peoplePillSel = [
-            'button[aria-label="People"]',
-            '.search-reusables__filter-pill-button',
-            'a[href*="/search/results/people/"]',
-          ].join(', ');
+          const urlAfterSearch = browserPage.url();
+          logger.info('URL after search box submit', { userId, url: urlAfterSearch.substring(0, 120) });
 
-          const peoplePill = await browserPage.$(peoplePillSel);
-          if (peoplePill) {
-            const pillText = await peoplePill.textContent() ?? '';
-            const pillTag = await peoplePill.evaluate((el) => el.tagName.toLowerCase());
-            // Only click if it's actually the People pill (not already on people page)
-            if (pillText.toLowerCase().includes('people') || pillTag === 'button') {
-              await peoplePill.click();
-              await browserPage.waitForNavigation({
-                waitUntil: 'domcontentloaded',
-                timeout: config.playwright.browserTimeoutMs,
-              }).catch(() => {});
-              logger.info('Clicked People filter', { userId });
-              await randomDelay(800, 1500);
-            }
-          } else {
-            logger.warn('People pill not found, may already be on people search or no results', { userId });
+          if (!urlAfterSearch.includes('/search/results/people/')) {
+            // Either landed on /search/results/all/ or stayed on feed.
+            // Navigate directly to people search — we're already in-context on
+            // LinkedIn so there's no cold-start sid/origin detection to worry about.
+            const peopleUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchQuery)}`;
+            logger.info('Navigating to people search URL in-context', { userId });
+            await browserPage.goto(peopleUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: config.playwright.browserTimeoutMs,
+            });
+            await randomDelay(800, 1500);
           }
         } else {
-          // Search box not found — fall back to direct URL without sid/origin spam
-          logger.warn('Search box not found, falling back to direct URL', { userId });
-          const fallbackUrl = buildLinkedInSearchUrl(params);
-          await browserPage.goto(fallbackUrl, {
+          // Search box not found — navigate directly (already warmed via feed above)
+          logger.warn('Search box not found, using direct in-context navigation', { userId });
+          const peopleUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchQuery)}`;
+          await browserPage.goto(peopleUrl, {
             waitUntil: 'domcontentloaded',
             timeout: config.playwright.browserTimeoutMs,
           });
