@@ -471,20 +471,30 @@ export class PlaywrightLinkedInAdapter {
             // LinkedIn so there's no cold-start sid/origin detection to worry about.
             const peopleUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchQuery)}`;
             logger.info('Navigating to people search URL in-context', { userId });
-            await browserPage.goto(peopleUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: config.playwright.browserTimeoutMs,
-            });
+            try {
+              await browserPage.goto(peopleUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: config.playwright.browserTimeoutMs,
+              });
+            } catch (navErr) {
+              if (String(navErr).includes('ERR_TOO_MANY_REDIRECTS')) throw new Error('LINKEDIN_SESSION_EXPIRED');
+              throw navErr;
+            }
             await randomDelay(800, 1500);
           }
         } else {
           // Search box not found — navigate directly (already warmed via feed above)
           logger.warn('Search box not found, using direct in-context navigation', { userId });
           const peopleUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchQuery)}`;
-          await browserPage.goto(peopleUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: config.playwright.browserTimeoutMs,
-          });
+          try {
+            await browserPage.goto(peopleUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: config.playwright.browserTimeoutMs,
+            });
+          } catch (navErr) {
+            if (String(navErr).includes('ERR_TOO_MANY_REDIRECTS')) throw new Error('LINKEDIN_SESSION_EXPIRED');
+            throw navErr;
+          }
         }
       } else {
         // Page 2+: we're paginating within an established search session.
@@ -505,8 +515,8 @@ export class PlaywrightLinkedInAdapter {
       const finalUrl = browserPage.url();
       logger.info('Landed on URL after search', { userId, url: finalUrl.substring(0, 120) });
 
-      // Check if redirected to auth (session expired)
-      if (finalUrl.includes('/login') || finalUrl.includes('/checkpoint')) {
+      // Check if redirected to auth (session expired or invalid cookies)
+      if (finalUrl.includes('/login') || finalUrl.includes('/checkpoint') || finalUrl.includes('/authwall')) {
         throw new Error('LINKEDIN_SESSION_EXPIRED');
       }
 

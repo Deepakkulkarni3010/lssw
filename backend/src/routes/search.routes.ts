@@ -133,6 +133,7 @@ async function executeSearchAsync(
     let status: 'failed' | 'rate_limited' | 'captcha' = 'failed';
     if (error.message === 'LINKEDIN_CAPTCHA') status = 'captcha';
     if (error.message.includes('RATE_LIMIT')) status = 'rate_limited';
+    if (error.message.includes('SESSION_EXPIRED') || error.message.includes('ERR_TOO_MANY_REDIRECTS')) status = 'failed';
 
     logger.error('Search execution failed', { jobId, error: error.message });
     await redisClient.setex(keys.jobStatus(jobId), 60, JSON.stringify({
