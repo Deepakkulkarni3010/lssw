@@ -359,6 +359,23 @@ export class PlaywrightLinkedInAdapter {
         secure: true,
       },
     ]);
+
+    // Warm up: visit LinkedIn feed so it sets bcookie, bscookie, lidc, etc.
+    // Without these tracking cookies LinkedIn fingerprints the session as a bot.
+    const warmupPage = await ctx.newPage();
+    try {
+      await warmupPage.goto('https://www.linkedin.com/feed/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+      await warmupPage.waitForTimeout(2500);
+      logger.info('LinkedIn session warmed up', { userId });
+    } catch (e) {
+      logger.warn('Session warm-up failed (non-fatal)', { userId, err: String(e) });
+    } finally {
+      await warmupPage.close();
+    }
+
     await saveContext(userId, ctx);
   }
 
