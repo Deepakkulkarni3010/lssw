@@ -122,8 +122,10 @@ async function executeSearchAsync(
       durationMs: Date.now() - startMs,
     };
 
-    // Cache results (10 min TTL)
-    await redisClient.setex(cacheKey, config.cache.resultTtlSeconds, JSON.stringify(resultPayload));
+    // Cache results only when non-empty — zero results may be bot detection artifacts
+    if (results.length > 0) {
+      await redisClient.setex(cacheKey, config.cache.resultTtlSeconds, JSON.stringify(resultPayload));
+    }
     await finalizeJob(jobId, historyId, userId, cacheKey, results.length, startMs, false);
 
   } catch (err) {
