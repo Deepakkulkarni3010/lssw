@@ -469,8 +469,9 @@ export class PlaywrightLinkedInAdapter {
           const peoplePill = await browserPage.$(peoplePillSel);
           if (peoplePill) {
             const pillText = await peoplePill.textContent() ?? '';
+            const pillTag = await peoplePill.evaluate((el) => el.tagName.toLowerCase());
             // Only click if it's actually the People pill (not already on people page)
-            if (pillText.toLowerCase().includes('people') || peoplePill.tagName === 'BUTTON') {
+            if (pillText.toLowerCase().includes('people') || pillTag === 'button') {
               await peoplePill.click();
               await browserPage.waitForNavigation({
                 waitUntil: 'domcontentloaded',
