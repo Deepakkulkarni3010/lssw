@@ -360,8 +360,8 @@ export class PlaywrightLinkedInAdapter {
       },
     ]);
 
-    // Warm up: visit LinkedIn feed so it sets bcookie, bscookie, lidc, etc.
-    // Without these tracking cookies LinkedIn fingerprints the session as a bot.
+    // Warm up: visit LinkedIn feed so it sets bcookie, bscookie, lidc, _px3, etc.
+    // This primes the PerimeterX challenge token in this browser context.
     const warmupPage = await ctx.newPage();
     try {
       await warmupPage.goto('https://www.linkedin.com/feed/', {
@@ -402,6 +402,21 @@ export class PlaywrightLinkedInAdapter {
       await browserPage.route('**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf}', (route) => {
         route.abort();
       });
+
+      // ── Feed-first navigation ──────────────────────────────────────────────
+      // PerimeterX ties its challenge token to the page session. Going directly
+      // to the search URL from a fresh tab triggers bot detection. Visiting the
+      // feed first establishes the session in this tab, then we navigate to search.
+      logger.info('Warming page via feed before search', { userId });
+      try {
+        await browserPage.goto('https://www.linkedin.com/feed/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await randomDelay(1500, 3000);
+      } catch (e) {
+        logger.warn('Feed pre-navigation failed (non-fatal), proceeding to search', { userId, err: String(e) });
+      }
 
       const url = buildLinkedInSearchUrl(params);
       const pageUrl = page > 1 ? `${url}&start=${(page - 1) * 10}` : url;
