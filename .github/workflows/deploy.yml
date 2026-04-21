@@ -26,6 +26,7 @@ jobs:
             --exclude='node_modules' \
             --exclude='dist' \
             --exclude='.git' \
+            --exclude='data/' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
             ./ root@${{ secrets.SSH_HOST }}:/opt/lssw/
 
