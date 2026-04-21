@@ -403,37 +403,112 @@ export class PlaywrightLinkedInAdapter {
         route.abort();
       });
 
-      // ── Feed-first navigation ──────────────────────────────────────────────
-      // PerimeterX ties its challenge token to the page session. Going directly
-      // to the search URL from a fresh tab triggers bot detection. Visiting the
-      // feed first establishes the session in this tab, then we navigate to search.
-      logger.info('Warming page via feed before search', { userId });
-      try {
+      // Build the keyword string (same logic as URL builder but just the text)
+      const keywordParts: string[] = [];
+      if (params.customString)      keywordParts.push(params.customString);
+      else if (params.keywords)     keywordParts.push(params.keywords);
+      if (params.title)             keywordParts.push(params.title);
+      if (params.company)           keywordParts.push(params.company);
+      if (params.location)          keywordParts.push(params.location);
+      if (params.school)            keywordParts.push(params.school);
+      const searchQuery = keywordParts.join(' ').trim() || 'software engineer';
+
+      // ── Search-box interaction (page 1) ───────────────────────────────────
+      // Direct URL navigation with origin=FACETED_SEARCH&sid=<timestamp> is a
+      // bot signal LinkedIn's backend validates against the user's session graph.
+      // Instead: navigate to feed, type in the real search box, press Enter,
+      // then click the People filter — exactly what a human does.
+      if (page === 1) {
+        logger.info('Navigating to feed for search-box interaction', { userId });
         await browserPage.goto('https://www.linkedin.com/feed/', {
           waitUntil: 'domcontentloaded',
-          timeout: 15000,
+          timeout: config.playwright.browserTimeoutMs,
         });
-        await randomDelay(1500, 3000);
-      } catch (e) {
-        logger.warn('Feed pre-navigation failed (non-fatal), proceeding to search', { userId, err: String(e) });
+
+        const feedUrl = browserPage.url();
+        if (feedUrl.includes('/login') || feedUrl.includes('/checkpoint')) {
+          throw new Error('LINKEDIN_SESSION_EXPIRED');
+        }
+
+        await randomDelay(1200, 2500);
+
+        // Type into LinkedIn's global search box
+        const searchInputSel = [
+          '.search-global-typeahead__input',
+          'input[placeholder*="Search"]',
+          'input[role="combobox"]',
+        ].join(', ');
+
+        const searchInput = await browserPage.waitForSelector(searchInputSel, { timeout: 8000 })
+          .catch(() => null);
+
+        if (searchInput) {
+          await searchInput.click();
+          await randomDelay(300, 600);
+          await searchInput.fill('');
+          await searchInput.type(searchQuery, { delay: 80 });
+          await randomDelay(400, 800);
+          await browserPage.keyboard.press('Enter');
+          logger.info('Search query submitted via search box', { userId, query: searchQuery });
+
+          // Wait for navigation to search results
+          await browserPage.waitForNavigation({
+            waitUntil: 'domcontentloaded',
+            timeout: config.playwright.browserTimeoutMs,
+          }).catch(() => {});
+
+          await randomDelay(800, 1500);
+
+          // Click "People" filter tab to scope results to people
+          const peoplePillSel = [
+            'button[aria-label="People"]',
+            '.search-reusables__filter-pill-button',
+            'a[href*="/search/results/people/"]',
+          ].join(', ');
+
+          const peoplePill = await browserPage.$(peoplePillSel);
+          if (peoplePill) {
+            const pillText = await peoplePill.textContent() ?? '';
+            // Only click if it's actually the People pill (not already on people page)
+            if (pillText.toLowerCase().includes('people') || peoplePill.tagName === 'BUTTON') {
+              await peoplePill.click();
+              await browserPage.waitForNavigation({
+                waitUntil: 'domcontentloaded',
+                timeout: config.playwright.browserTimeoutMs,
+              }).catch(() => {});
+              logger.info('Clicked People filter', { userId });
+              await randomDelay(800, 1500);
+            }
+          } else {
+            logger.warn('People pill not found, may already be on people search or no results', { userId });
+          }
+        } else {
+          // Search box not found — fall back to direct URL without sid/origin spam
+          logger.warn('Search box not found, falling back to direct URL', { userId });
+          const fallbackUrl = buildLinkedInSearchUrl(params);
+          await browserPage.goto(fallbackUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: config.playwright.browserTimeoutMs,
+          });
+        }
+      } else {
+        // Page 2+: we're paginating within an established search session.
+        // Build URL from current search context, just advance the offset.
+        const paginatedUrl = buildLinkedInSearchUrl(params) + `&start=${(page - 1) * 10}`;
+        logger.info('Paginating search', { userId, page, url: paginatedUrl.substring(0, 100) });
+        await browserPage.goto('https://www.linkedin.com/feed/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 12000,
+        }).catch(() => {});
+        await randomDelay(800, 1500);
+        await browserPage.goto(paginatedUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: config.playwright.browserTimeoutMs,
+        });
       }
 
-      const url = buildLinkedInSearchUrl(params);
-      const pageUrl = page > 1 ? `${url}&start=${(page - 1) * 10}` : url;
-
-      logger.info('Navigating to LinkedIn search', {
-        userId,
-        url: pageUrl.substring(0, 100),
-      });
-
-      const response = await browserPage.goto(pageUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: config.playwright.browserTimeoutMs,
-      });
-
-      if (!response) throw new Error('LINKEDIN_NO_RESPONSE');
-
       const finalUrl = browserPage.url();
+      logger.info('Landed on URL after search', { userId, url: finalUrl.substring(0, 120) });
 
       // Check if redirected to auth (session expired)
       if (finalUrl.includes('/login') || finalUrl.includes('/checkpoint')) {
